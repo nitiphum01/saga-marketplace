@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "687104936130",
+    "project_id": "saga-marketplace-f4811",
+    "storage_bucket": "saga-marketplace-f4811.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:687104936130:android:0bf234f0030e4d71c0935b",
+        "android_client_info": {
+          "package_name": "com.example.flutter_application_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDNnIxHGvHgdpCPe-GGA6xE85Hv8D1HfyY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
