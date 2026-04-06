@@ -6,11 +6,12 @@ import 'package:flutter_application_1/features/marketplace/models/product_model.
 import 'package:flutter_application_1/features/marketplace/screens/home_screen.dart';
 import 'package:flutter_application_1/features/marketplace/screens/product_detail_screen.dart';
 import 'package:flutter_application_1/features/marketplace/screens/add_product_screen.dart';
-import 'package:flutter_application_1/features/marketplace/screens/my_listings_screen.dart';
+import 'package:flutter_application_1/features/marketplace/screens/my_products_screen.dart';
 import 'package:flutter_application_1/features/marketplace/screens/edit_product_screen.dart';
 import 'package:flutter_application_1/features/chat/screens/chat_list_screen.dart';
 import 'package:flutter_application_1/features/chat/screens/chat_room_screen.dart';
 import 'package:flutter_application_1/features/profile/screens/profile_screen.dart';
+import 'package:flutter_application_1/features/profile/screens/profile_setup_screen.dart';
 import 'package:flutter_application_1/features/settings/screens/settings_screen.dart';
 import 'package:flutter_application_1/core/widgets/scaffold_with_navbar.dart';
 
@@ -29,15 +30,23 @@ GoRouter createRouter() {
     redirect: (context, state) {
       final authProvider = context.read<AuthProvider>();
       final isAuthenticated = authProvider.isAuthenticated;
-      final isLoggingIn = state.matchedLocation == '/';
+      final needsSetup = authProvider.needsProfileSetup;
+      final location = state.matchedLocation;
+      final isLoggingIn = location == '/';
+      final isSetupRoute = location == '/profile-setup';
 
       // Redirect unauthenticated users to login
       if (!isAuthenticated && !isLoggingIn) {
         return '/';
       }
 
-      // Redirect authenticated users away from login
-      if (isAuthenticated && isLoggingIn) {
+      // First-time users must complete profile setup before entering app.
+      if (isAuthenticated && needsSetup && !isSetupRoute) {
+        return '/profile-setup';
+      }
+
+      // Returning users should not see login or setup screen.
+      if (isAuthenticated && !needsSetup && (isLoggingIn || isSetupRoute)) {
         return '/home';
       }
 
@@ -46,6 +55,12 @@ GoRouter createRouter() {
     routes: [
       // Login route - NO bottom nav
       GoRoute(path: '/', builder: (context, state) => const LoginScreen()),
+
+      // First-time profile setup route - NO bottom nav
+      GoRoute(
+        path: '/profile-setup',
+        builder: (context, state) => const ProfileSetupScreen(),
+      ),
 
       // Main app routes with persistent bottom nav
       ShellRoute(
@@ -103,7 +118,13 @@ GoRouter createRouter() {
       // My Listings route - NO bottom nav
       GoRoute(
         path: '/my-listings',
-        builder: (context, state) => const MyListingsScreen(),
+        builder: (context, state) => const MyProductsScreen(),
+      ),
+
+      // My Products route - NO bottom nav
+      GoRoute(
+        path: '/my-products',
+        builder: (context, state) => const MyProductsScreen(),
       ),
 
       // Edit Product route - NO bottom nav

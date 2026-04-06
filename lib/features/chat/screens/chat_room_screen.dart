@@ -1,10 +1,14 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_application_1/features/marketplace/models/product_model.dart';
+import 'package:provider/provider.dart';
+import 'package:flutter_application_1/core/constants/app_colors.dart';
+import 'package:flutter_application_1/core/widgets/platform_file_preview.dart';
+import 'package:flutter_application_1/core/widgets/saga_app_bar.dart';
+import 'package:flutter_application_1/features/auth/providers/auth_provider.dart';
 import 'package:flutter_application_1/features/chat/providers/chat_provider.dart';
-import 'package:flutter_application_1/features/chat/models/chat_model.dart';
+import 'package:flutter_application_1/features/marketplace/models/product_model.dart';
 
 class ChatRoomScreen extends StatefulWidget {
   final String? roomId;
@@ -23,7 +27,7 @@ class ChatRoomScreen extends StatefulWidget {
 }
 
 class _ChatRoomScreenState extends State<ChatRoomScreen> {
-  late TextEditingController _messageController;
+  late final TextEditingController _messageController;
   String? _currentRoomId;
 
   @override
@@ -39,60 +43,104 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     super.dispose();
   }
 
-  void _sendMessage() {
-    if (_messageController.text.isEmpty || _currentRoomId == null) return;
+  Future<void> _sendMessage() async {
+    if (_currentRoomId == null) {
+      return;
+    }
 
-    context.read<ChatProvider>().sendMessage(
-      _currentRoomId!,
-      _messageController.text,
-      'user_123', // Current user ID
-    );
+    final text = _messageController.text.trim();
+    if (text.isEmpty) {
+      return;
+    }
 
-    _messageController.clear();
-
-    // Scroll to bottom after sending
-    // Future implementation: Add ScrollController
-  }
-
-  String _formatTime(DateTime time) {
-    return DateFormat('HH:mm').format(time);
+    final currentUserId = context.read<AuthProvider>().getCurrentUserId();
+    try {
+      await context.read<ChatProvider>().sendMessage(
+        roomId: _currentRoomId!,
+        text: text,
+        senderId: currentUserId,
+        product: widget.product,
+        sellerId: widget.sellerId,
+      );
+      if (!mounted) {
+        return;
+      }
+      _messageController.clear();
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Send failed: $e', style: GoogleFonts.kanit())),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_currentRoomId == null || _currentRoomId!.trim().isEmpty) {
+      return Scaffold(
+        appBar: SagaAppBar(
+          title: Text(
+            'Chat',
+            style: GoogleFonts.kanit(fontWeight: FontWeight.w700),
+          ),
+        ),
+        body: Center(
+          child: Text(
+            'Conversation not found.',
+            style: GoogleFonts.kanit(fontSize: 16),
+          ),
+        ),
+      );
+    }
+
+    final currentUserId = context.read<AuthProvider>().getCurrentUserId();
+
     return Scaffold(
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: Colors.white,
+      resizeToAvoidBottomInset: true,
+      appBar: SagaAppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black87),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Consumer<ChatProvider>(
-          builder: (context, chatProvider, child) {
-            if (_currentRoomId == null) return const SizedBox();
+        title: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: context.read<ChatProvider>().streamConversation(
+            _currentRoomId!,
+          ),
+          builder: (context, snapshot) {
+            final conversationData =
+                snapshot.data?.data() ?? const <String, dynamic>{};
+            final participants =
+                (conversationData['participants'] as List?)
+                    ?.whereType<String>()
+                    .toList() ??
+                <String>[];
 
-            final room = chatProvider.getChatRoomById(_currentRoomId!);
-            if (room == null) return const SizedBox();
+            final otherUserId = participants.firstWhere(
+              (id) => id != currentUserId,
+              orElse: () => widget.sellerId,
+            );
 
+            final displayName = 'Seller ${_shortId(otherUserId)}';
             return Row(
               children: [
                 CircleAvatar(
                   radius: 18,
-                  backgroundColor: const Color(0xFF1565C0).withOpacity(0.1),
+                  backgroundColor: AppColors.mfuBlue.withValues(alpha: 0.12),
                   child: Text(
-                    room.otherUserName.substring(0, 1).toUpperCase(),
+                    displayName[0].toUpperCase(),
                     style: GoogleFonts.kanit(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: const Color(0xFF1565C0),
+                      color: AppColors.mfuBlue,
                     ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    room.otherUserName,
+                    displayName,
                     style: GoogleFonts.kanit(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -105,36 +153,114 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
           },
         ),
       ),
-      body: Consumer<ChatProvider>(
-        builder: (context, chatProvider, child) {
-          if (_currentRoomId == null) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: Column(
+        children: [
+          StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: context.read<ChatProvider>().streamConversation(
+              _currentRoomId!,
+            ),
+            builder: (context, snapshot) {
+              final data = snapshot.data?.data();
+              final productInfo = data == null
+                  ? null
+                  : data['productInfo'] as Map<String, dynamic>?;
+              return _buildProductContextBar(productInfo);
+            },
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: context.read<ChatProvider>().streamMessages(
+                _currentRoomId!,
+              ),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: AppColors.mfuRed),
+                  );
+                }
 
-          final room = chatProvider.getChatRoomById(_currentRoomId!);
-          if (room == null) {
-            return Center(
-              child: Text('Chat room not found', style: GoogleFonts.kanit()),
-            );
-          }
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Text(
+                      'Unable to load messages.',
+                      style: GoogleFonts.kanit(),
+                    ),
+                  );
+                }
 
-          return Column(
-            children: [
-              // Product Context Bar
-              _buildProductContextBar(room),
-              // Messages List
-              Expanded(child: _buildMessageList(room.messages)),
-              // Message Input Area
-              _buildMessageInput(),
-            ],
-          );
-        },
+                final docs = snapshot.data?.docs ?? const [];
+                if (docs.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.chat_bubble_outline,
+                          size: 64,
+                          color: Colors.grey.shade300,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'No messages yet',
+                          style: GoogleFonts.kanit(
+                            fontSize: 16,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Start the conversation!',
+                          style: GoogleFonts.kanit(
+                            fontSize: 14,
+                            color: Colors.grey.shade500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final data = docs[index].data();
+                    final senderId = data['senderId'] as String? ?? '';
+                    final text = data['text'] as String? ?? '';
+                    final timestamp = data['timestamp'] as Timestamp?;
+                    final isSent = senderId == currentUserId;
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _MessageBubble(
+                        message: text,
+                        isSent: isSent,
+                        timestamp: _formatTime(timestamp?.toDate()),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          _buildMessageInput(),
+        ],
       ),
     );
   }
 
-  /// Builds the product context bar showing the item being discussed
-  Widget _buildProductContextBar(ChatRoom room) {
+  Widget _buildProductContextBar(Map<String, dynamic>? productInfo) {
+    final title = productInfo == null
+        ? widget.product?.title ?? 'Product conversation'
+        : productInfo['title'] as String? ?? 'Product conversation';
+
+    final image = productInfo == null
+        ? widget.product?.imageUrl ?? ''
+        : productInfo['image'] as String? ?? '';
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -143,7 +269,6 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
       ),
       child: Row(
         children: [
-          // Product Image
           Container(
             width: 70,
             height: 70,
@@ -153,28 +278,16 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                room.productImage,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Center(
-                    child: Icon(
-                      Icons.image_not_supported_outlined,
-                      color: Colors.grey.shade400,
-                    ),
-                  );
-                },
-              ),
+              child: PlatformFilePreview(path: image),
             ),
           ),
           const SizedBox(width: 12),
-          // Product Info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  room.productTitle,
+                  title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.kanit(
@@ -199,125 +312,86 @@ class _ChatRoomScreenState extends State<ChatRoomScreen> {
     );
   }
 
-  /// Builds the messages list
-  Widget _buildMessageList(List<ChatMessage> messages) {
-    if (messages.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildMessageInput() {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.grey.shade200)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Icon(
-              Icons.chat_bubble_outline,
-              size: 64,
-              color: Colors.grey.shade300,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No messages yet',
-              style: GoogleFonts.kanit(
-                fontSize: 16,
-                color: Colors.grey.shade600,
+            Expanded(
+              child: TextField(
+                controller: _messageController,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _sendMessage(),
+                decoration: InputDecoration(
+                  hintText: 'Type a message...',
+                  hintStyle: GoogleFonts.kanit(
+                    fontSize: 14,
+                    color: Colors.grey.shade400,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: Colors.grey.shade300),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(color: Colors.grey.shade300),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: const BorderSide(color: AppColors.mfuRed),
+                  ),
+                ),
+                style: GoogleFonts.kanit(fontSize: 14),
+                minLines: 1,
+                maxLines: 5,
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Start the conversation!',
-              style: GoogleFonts.kanit(
-                fontSize: 14,
-                color: Colors.grey.shade500,
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _sendMessage,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: const BoxDecoration(
+                  color: AppColors.mfuRed,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.send, color: Colors.white, size: 20),
               ),
             ),
           ],
         ),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final message = messages[index];
-        final isSent = message.senderId == 'user_123';
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: _MessageBubble(
-            message: message,
-            isSent: isSent,
-            timestamp: _formatTime(message.timestamp),
-          ),
-        );
-      },
+      ),
     );
   }
 
-  /// Builds the message input area
-  Widget _buildMessageInput() {
-    return Container(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 12,
-        top: 8,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.grey.shade200)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _messageController,
-              decoration: InputDecoration(
-                hintText: 'Type a message...',
-                hintStyle: GoogleFonts.kanit(
-                  fontSize: 14,
-                  color: Colors.grey.shade400,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide(color: Colors.grey.shade300),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: const BorderSide(color: Color(0xFFB71C1C)),
-                ),
-              ),
-              style: GoogleFonts.kanit(fontSize: 14),
-              minLines: 1,
-              maxLines: 3,
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Send Button
-          GestureDetector(
-            onTap: _sendMessage,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: const BoxDecoration(
-                color: Color(0xFFB71C1C),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.send, color: Colors.white, size: 20),
-            ),
-          ),
-        ],
-      ),
-    );
+  String _formatTime(DateTime? time) {
+    if (time == null) {
+      return '--:--';
+    }
+    return DateFormat('HH:mm').format(time);
+  }
+
+  String _shortId(String id) {
+    if (id.length <= 8) {
+      return id;
+    }
+    return '${id.substring(0, 8)}...';
   }
 }
 
-/// Message bubble widget
 class _MessageBubble extends StatelessWidget {
-  final ChatMessage message;
+  final String message;
   final bool isSent;
   final String timestamp;
 
@@ -329,42 +403,56 @@ class _MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bubbleRadius = BorderRadius.only(
+      topLeft: const Radius.circular(18),
+      topRight: const Radius.circular(18),
+      bottomLeft: Radius.circular(isSent ? 18 : 6),
+      bottomRight: Radius.circular(isSent ? 6 : 18),
+    );
+
     return Row(
       mainAxisAlignment: isSent
           ? MainAxisAlignment.end
           : MainAxisAlignment.start,
       children: [
-        Container(
+        ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.7,
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: isSent ? const Color(0xFFB71C1C) : Colors.grey.shade200,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                message.text,
-                style: GoogleFonts.kanit(
-                  fontSize: 14,
-                  color: isSent ? Colors.white : Colors.black87,
-                  height: 1.4,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: isSent ? AppColors.mfuRed : Colors.grey.shade200,
+              borderRadius: bubbleRadius,
+            ),
+            child: Column(
+              crossAxisAlignment: isSent
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  message,
+                  softWrap: true,
+                  overflow: TextOverflow.visible,
+                  style: GoogleFonts.kanit(
+                    fontSize: 14,
+                    color: isSent ? Colors.white : Colors.black87,
+                    height: 1.35,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                timestamp,
-                style: GoogleFonts.kanit(
-                  fontSize: 11,
-                  color: isSent
-                      ? Colors.white.withOpacity(0.7)
-                      : Colors.grey.shade600,
+                const SizedBox(height: 4),
+                Text(
+                  timestamp,
+                  style: GoogleFonts.kanit(
+                    fontSize: 11,
+                    color: isSent
+                        ? Colors.white.withValues(alpha: 0.75)
+                        : Colors.grey.shade600,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],

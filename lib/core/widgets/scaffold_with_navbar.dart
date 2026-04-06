@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_application_1/core/constants/app_colors.dart';
 
 /// A scaffold widget that provides a persistent bottom navigation bar
 /// across multiple screens within the app.
@@ -34,7 +35,6 @@ class ScaffoldWithNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currentIndex = _getCurrentIndex(context);
-    const mfuRed = Color(0xFFB71C1C);
 
     return Scaffold(
       body: child,
@@ -55,29 +55,32 @@ class ScaffoldWithNavBar extends StatelessWidget {
           },
           selectedIndex: currentIndex,
           backgroundColor: Colors.white,
-          indicatorColor: mfuRed.withOpacity(0.1),
+          indicatorColor: AppColors.mfuRed.withOpacity(0.1),
           elevation: 0,
           height: 65,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           destinations: <Widget>[
             NavigationDestination(
               icon: const Icon(Icons.home_outlined),
-              selectedIcon: const Icon(Icons.home, color: mfuRed),
+              selectedIcon: const Icon(Icons.home, color: AppColors.mfuRed),
               label: 'Market',
             ),
             NavigationDestination(
               icon: const Icon(Icons.chat_bubble_outline),
-              selectedIcon: const Icon(Icons.chat_bubble, color: mfuRed),
+              selectedIcon: const Icon(
+                Icons.chat_bubble,
+                color: AppColors.mfuRed,
+              ),
               label: 'Chat',
             ),
             NavigationDestination(
               icon: const Icon(Icons.person_outline),
-              selectedIcon: const Icon(Icons.person, color: mfuRed),
+              selectedIcon: const Icon(Icons.person, color: AppColors.mfuRed),
               label: 'Profile',
             ),
             NavigationDestination(
               icon: const Icon(Icons.settings_outlined),
-              selectedIcon: const Icon(Icons.settings, color: mfuRed),
+              selectedIcon: const Icon(Icons.settings, color: AppColors.mfuRed),
               label: 'Settings',
             ),
           ],

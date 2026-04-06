@@ -1,8 +1,9 @@
 import 'package:flutter_application_1/features/auth/models/user_model.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 
 /// Abstract service interface for authentication operations
 abstract class AuthService {
-  Future<User> login(String email, String password);
+  Future<User> login(String studentId, String password);
   Future<void> logout();
 }
 
@@ -11,29 +12,93 @@ class MockAuthService implements AuthService {
   /// MFU email domain
   static const String _mfuEmailDomain = '@lamduan.mfu.ac.th';
 
-  /// Validates and logs in a user with MFU email verification
-  @override
-  Future<User> login(String email, String password) async {
-    // Simulate network delay
-    await Future.delayed(const Duration(seconds: 1));
+  /// Mock password injected at build/run time.
+  /// Example: --dart-define=MOCK_AUTH_PASSWORD=your-dev-password
+  static const String _mockAuthPassword = String.fromEnvironment(
+    'MOCK_AUTH_PASSWORD',
+  );
 
-    // Verify MFU email domain
-    if (!email.endsWith(_mfuEmailDomain)) {
-      throw Exception('Only MFU students allowed');
+  /// Mock users keyed by MFU email
+  static const Map<String, Map<String, String>> _mockUsers = {
+    '6731503017@lamduan.mfu.ac.th': {
+      'studentId': '6731503017',
+      'name': 'John Doe',
+      'faculty': 'School of Information Technology',
+    },
+    '6731503001@lamduan.mfu.ac.th': {
+      'studentId': '6731503001',
+      'name': 'Alice Smith',
+      'faculty': 'School of Science',
+    },
+    '6731503002@lamduan.mfu.ac.th': {
+      'studentId': '6731503002',
+      'name': 'Bob Johnson',
+      'faculty': 'School of Management',
+    },
+    '6731503003@lamduan.mfu.ac.th': {
+      'studentId': '6731503003',
+      'name': 'Emma Davis',
+      'faculty': 'School of Liberal Arts',
+    },
+    '6731503004@lamduan.mfu.ac.th': {
+      'studentId': '6731503004',
+      'name': 'Liam Wilson',
+      'faculty': 'School of Health Science',
+    },
+    '6731503005@lamduan.mfu.ac.th': {
+      'studentId': '6731503005',
+      'name': 'Olivia Brown',
+      'faculty': 'School of Law',
+    },
+  };
+
+  static void _ensureMockAuthConfigured() {
+    if (kReleaseMode) {
+      throw Exception(
+        'MockAuthService is disabled in release builds. Use a real backend auth provider.',
+      );
     }
 
-    // Generate mock user data based on email
-    final studentId = _extractStudentId(email);
-    final user = User(
-      id: 'user_${studentId}_${DateTime.now().millisecondsSinceEpoch}',
-      studentId: studentId,
-      email: email,
-      name: _generateMockName(studentId),
-      faculty: _generateMockFaculty(studentId),
-      profileImage: 'https://via.placeholder.com/150?text=$studentId',
-    );
+    if (_mockAuthPassword.isEmpty) {
+      throw Exception(
+        'Missing MOCK_AUTH_PASSWORD. Run with --dart-define=MOCK_AUTH_PASSWORD=<password>.',
+      );
+    }
+  }
 
-    print('[MockAuthService] User logged in: ${user.email}');
+  /// Validates and logs in a user with student ID + password.
+  /// The domain is appended automatically before credential lookup.
+  @override
+  Future<User> login(String studentId, String password) async {
+    // Simulate network delay
+    await Future.delayed(const Duration(seconds: 1));
+    _ensureMockAuthConfigured();
+
+    final normalizedStudentId = studentId.trim();
+    if (!_isValidStudentId(normalizedStudentId)) {
+      throw Exception('Student ID must be exactly 10 digits');
+    }
+
+    final finalEmail = '$normalizedStudentId$_mfuEmailDomain';
+    final userData = _mockUsers[finalEmail];
+
+    if (userData == null) {
+      throw Exception('Invalid credentials');
+    }
+
+    if (password != _mockAuthPassword) {
+      throw Exception('Invalid credentials');
+    }
+
+    final user = User(
+      id: 'user_${userData['studentId']}',
+      studentId: userData['studentId']!,
+      email: finalEmail,
+      name: userData['name']!,
+      faculty: userData['faculty']!,
+      profileImage:
+          'https://via.placeholder.com/150?text=${userData['studentId']}',
+    );
     return user;
   }
 
@@ -42,46 +107,9 @@ class MockAuthService implements AuthService {
   Future<void> logout() async {
     // Simulate logout delay
     await Future.delayed(const Duration(milliseconds: 300));
-    print('[MockAuthService] User logged out');
   }
 
-  /// Extracts student ID from email (e.g., 'd640001' from '640001@lamduan.mfu.ac.th')
-  String _extractStudentId(String email) {
-    final parts = email.split('@');
-    return parts[0];
-  }
-
-  /// Generates a mock name based on student ID
-  String _generateMockName(String studentId) {
-    final mockNames = [
-      'Somchai Rungrot',
-      'Niran Petchsri',
-      'Supachai Wongon',
-      'Aniwat Kaewprom',
-      'Prawin Jaksripai',
-      'Thaniya Nonta',
-      'Waranont Jitmol',
-      'Chutima Rungsri',
-      'Duangchai Thongchit',
-      'Somphet Kasimpor',
-    ];
-    final index = (studentId.hashCode % mockNames.length).abs();
-    return mockNames[index];
-  }
-
-  /// Generates a mock faculty based on student ID
-  String _generateMockFaculty(String studentId) {
-    final mockFaculties = [
-      'Faculty of Engineering',
-      'Faculty of Science',
-      'Faculty of Business',
-      'Faculty of Liberal Arts',
-      'Faculty of Architecture',
-      'Faculty of Agricultural Technology',
-      'Faculty of Information Technology',
-      'Faculty of Medicine',
-    ];
-    final index = (studentId.hashCode % mockFaculties.length).abs();
-    return mockFaculties[index];
+  bool _isValidStudentId(String studentId) {
+    return RegExp(r'^\d{10}$').hasMatch(studentId);
   }
 }

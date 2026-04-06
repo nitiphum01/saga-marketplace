@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_application_1/features/marketplace/models/product_model.dart';
 import 'package:flutter_application_1/features/marketplace/providers/product_provider.dart';
 import 'package:flutter_application_1/features/auth/providers/auth_provider.dart';
+import 'package:flutter_application_1/core/widgets/platform_file_preview.dart';
 
 class MyListingsScreen extends StatelessWidget {
   const MyListingsScreen({super.key});
@@ -32,7 +33,7 @@ class MyListingsScreen extends StatelessWidget {
       ),
       body: Consumer2<ProductProvider, AuthProvider>(
         builder: (context, productProvider, authProvider, _) {
-          final userId = authProvider.user?.id ?? 'user_123';
+          final userId = authProvider.getCurrentUserId();
           final myProducts = productProvider.getProductsBySellerId(userId);
 
           if (myProducts.isEmpty) {
@@ -78,7 +79,7 @@ class MyListingsScreen extends StatelessWidget {
                   context.push('/edit-product', extra: product);
                 },
                 onDelete: () {
-                  _showDeleteDialog(context, product);
+                  _showDeleteDialog(context, product, userId);
                 },
               );
             },
@@ -88,7 +89,11 @@ class MyListingsScreen extends StatelessWidget {
     );
   }
 
-  void _showDeleteDialog(BuildContext context, Product product) {
+  void _showDeleteDialog(
+    BuildContext context,
+    Product product,
+    String currentUserId,
+  ) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -113,13 +118,23 @@ class MyListingsScreen extends StatelessWidget {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              context.read<ProductProvider>().deleteProduct(product.id);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Item deleted', style: GoogleFonts.kanit()),
-                  backgroundColor: const Color(0xFFB71C1C),
-                ),
-              );
+              try {
+                context.read<ProductProvider>().deleteProduct(
+                  id: product.id,
+                  currentUserId: currentUserId,
+                );
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Item deleted', style: GoogleFonts.kanit()),
+                    backgroundColor: const Color(0xFFB71C1C),
+                  ),
+                );
+              } catch (e) {
+                final message = e.toString().replaceFirst('Exception: ', '');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(message, style: GoogleFonts.kanit())),
+                );
+              }
             },
             child: Text(
               'Delete',
@@ -172,17 +187,7 @@ class _ProductListItem extends StatelessWidget {
               width: 100,
               height: 100,
               color: Colors.grey.shade200,
-              child: Image.network(
-                product.imageUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Icon(
-                    Icons.image_not_supported_outlined,
-                    color: Colors.grey.shade400,
-                    size: 32,
-                  );
-                },
-              ),
+              child: PlatformFilePreview(path: product.imageUrl),
             ),
           ),
 

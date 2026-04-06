@@ -2,26 +2,61 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_application_1/core/constants/app_colors.dart';
 import 'package:flutter_application_1/features/marketplace/models/product_model.dart';
 import 'package:flutter_application_1/features/auth/providers/auth_provider.dart';
 import 'package:flutter_application_1/features/chat/providers/chat_provider.dart';
+import 'package:flutter_application_1/features/marketplace/screens/edit_product_screen.dart';
 
-class ProductDetailScreen extends StatelessWidget {
+class ProductDetailScreen extends StatefulWidget {
   final Product product;
 
   const ProductDetailScreen({required this.product, super.key});
 
-  /// Handles the chat/edit button action
-  void _handleChatAction(BuildContext context) {
-    final currentUser = context.read<AuthProvider>().user;
+  @override
+  State<ProductDetailScreen> createState() => _ProductDetailScreenState();
+}
 
-    // Check if current user is the seller
-    if (currentUser != null && currentUser.id == product.sellerId) {
-      // Show edit product action
+class _ProductDetailScreenState extends State<ProductDetailScreen> {
+  final PageController _pageController = PageController();
+  int _currentImageIndex = 0;
+
+  Product get product => widget.product;
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleBottomAction() async {
+    final currentUser = context.read<AuthProvider>().user;
+    final isSeller = currentUser != null && currentUser.id == product.sellerId;
+
+    if (isSeller) {
+      final updated = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => EditProductScreen(product: product)),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      if (updated == true) {
+        context.pop();
+      }
+      return;
+    }
+
+    if (currentUser == null) {
+      if (!mounted) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Edit Product - Coming Soon',
+            'Please sign in to start chat.',
             style: GoogleFonts.kanit(),
           ),
         ),
@@ -29,13 +64,28 @@ class ProductDetailScreen extends StatelessWidget {
       return;
     }
 
-    // Initiate chat with seller
-    final roomId = context.read<ChatProvider>().initiateChat(
-      product,
-      'user_123',
-    );
+    late final String roomId;
+    try {
+      roomId = await context.read<ChatProvider>().initiateChat(
+        product,
+        currentUser.id,
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to start chat: $e', style: GoogleFonts.kanit()),
+        ),
+      );
+      return;
+    }
 
-    // Navigate to chat room with product context
+    if (!mounted) {
+      return;
+    }
+
     context.push(
       '/chat-room',
       extra: {
@@ -48,239 +98,277 @@ class ProductDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currentUser = context.watch<AuthProvider>().user;
+    final isSeller = currentUser != null && currentUser.id == product.sellerId;
+
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          // Hero SliverAppBar with product image
-          SliverAppBar(
-            expandedHeight: 300,
-            pinned: true,
-            backgroundColor: Colors.white,
-            elevation: 0,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Hero(
-                tag: 'product_${product.id}',
-                child: Container(
-                  color: Colors.grey.shade200,
-                  child: Image.network(
-                    product.imageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Center(
-                        child: Icon(
-                          Icons.image_not_supported_outlined,
-                          color: Colors.grey.shade400,
-                          size: 80,
+      backgroundColor: Colors.grey.shade100,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.black87),
+        title: Text(
+          'Product Details',
+          style: GoogleFonts.kanit(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: Colors.black87,
+          ),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 90),
+        children: [
+          _buildImageCarousel(),
+          const SizedBox(height: 14),
+          _buildProductCard(),
+          const SizedBox(height: 12),
+          _buildSellerSection(),
+        ],
+      ),
+      bottomNavigationBar: _buildBottomActionBar(isSeller),
+    );
+  }
+
+  Widget _buildImageCarousel() {
+    final imageUrls = product.imageUrls;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        height: 280,
+        color: Colors.grey.shade200,
+        child: imageUrls.isEmpty
+            ? Icon(
+                Icons.image_not_supported_outlined,
+                size: 46,
+                color: Colors.grey.shade500,
+              )
+            : Stack(
+                children: [
+                  PageView.builder(
+                    controller: _pageController,
+                    itemCount: imageUrls.length,
+                    onPageChanged: (index) {
+                      setState(() {
+                        _currentImageIndex = index;
+                      });
+                    },
+                    itemBuilder: (context, index) {
+                      return CachedNetworkImage(
+                        imageUrl: imageUrls[index],
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => const Center(
+                          child: SizedBox(
+                            width: 28,
+                            height: 28,
+                            child: CircularProgressIndicator(strokeWidth: 2.2),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Icon(
+                          Icons.broken_image_outlined,
+                          size: 42,
+                          color: Colors.grey.shade500,
                         ),
                       );
                     },
                   ),
-                ),
-              ),
-            ),
-          ),
-          // Product Details Content
-          SliverToBoxAdapter(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(24),
-                  topRight: Radius.circular(24),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Title
-                        Text(
-                          product.title,
-                          style: GoogleFonts.kanit(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 12,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(imageUrls.length, (index) {
+                        final isActive = _currentImageIndex == index;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          width: isActive ? 14 : 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? Colors.white
+                                : Colors.white.withValues(alpha: 0.55),
+                            borderRadius: BorderRadius.circular(999),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        // Price and Category Row
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            // Price
-                            Text(
-                              '฿${product.price.toStringAsFixed(0)}',
-                              style: GoogleFonts.kanit(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                color: const Color(0xFFB71C1C),
-                              ),
-                            ),
-                            // Category Chip
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFD4AF37).withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: const Color(0xFFD4AF37),
-                                ),
-                              ),
-                              child: Text(
-                                product.category,
-                                style: GoogleFonts.kanit(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: const Color(0xFFD4AF37),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        // Description
-                        Text(
-                          'Description',
-                          style: GoogleFonts.kanit(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          product.description,
-                          style: GoogleFonts.kanit(
-                            fontSize: 14,
-                            color: Colors.grey.shade700,
-                            height: 1.6,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        // Seller Info Section
-                        _buildSellerInfo(),
-                        const SizedBox(height: 80), // Space for bottom button
-                      ],
+                        );
+                      }),
                     ),
                   ),
                 ],
               ),
-            ),
-          ),
-        ],
       ),
-      // Bottom Bar with Chat Button
-      bottomSheet: _buildBottomActionBar(context),
     );
   }
 
-  /// Builds the seller information widget
-  Widget _buildSellerInfo() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Seller Information',
-          style: GoogleFonts.kanit(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.black87,
+  Widget _buildProductCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade50,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            product.title,
+            style: GoogleFonts.kanit(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: Colors.black87,
+            ),
           ),
-          child: Row(
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Seller Avatar
-              CircleAvatar(
-                radius: 32,
-                backgroundColor: Colors.blue.shade700,
-                child: const Icon(Icons.person, color: Colors.white, size: 32),
+              Text(
+                '฿${product.price.toStringAsFixed(0)}',
+                style: GoogleFonts.kanit(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.green.shade700,
+                ),
               ),
-              const SizedBox(width: 16),
-              // Seller Details
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Seller ID: ${product.sellerId}',
-                      style: GoogleFonts.kanit(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Faculty of Engineering',
-                      style: GoogleFonts.kanit(
-                        fontSize: 12,
-                        color: Colors.grey.shade600,
-                      ),
-                    ),
-                  ],
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.accentGold.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  product.category,
+                  style: GoogleFonts.kanit(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF8C6D00),
+                  ),
                 ),
               ),
             ],
           ),
-        ),
-      ],
-    );
-  }
-
-  /// Builds the bottom action bar with chat button
-  Widget _buildBottomActionBar(BuildContext context) {
-    final currentUser = context.watch<AuthProvider>().user;
-    final isSeller = currentUser != null && currentUser.id == product.sellerId;
-
-    return Container(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-        top: 12,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, -2),
+          const SizedBox(height: 16),
+          Text(
+            'Description',
+            style: GoogleFonts.kanit(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            product.description,
+            style: GoogleFonts.kanit(
+              fontSize: 14,
+              height: 1.55,
+              color: Colors.grey.shade800,
+            ),
           ),
         ],
       ),
-      child: SizedBox(
-        width: double.infinity,
-        height: 56,
-        child: ElevatedButton(
-          onPressed: () => _handleChatAction(context),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFB71C1C),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+    );
+  }
+
+  Widget _buildSellerSection() {
+    final shortSeller = product.sellerId.length > 8
+        ? '${product.sellerId.substring(0, 8)}...'
+        : product.sellerId;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 24,
+            backgroundColor: Colors.blue.shade700,
+            child: const Icon(Icons.person, color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Seller Information',
+                  style: GoogleFonts.kanit(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'ID: $shortSeller',
+                  style: GoogleFonts.kanit(
+                    fontSize: 12,
+                    color: Colors.grey.shade700,
+                  ),
+                ),
+              ],
             ),
           ),
-          child: Text(
-            isSeller ? 'Edit Product' : 'Chat with Seller',
-            style: GoogleFonts.kanit(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomActionBar(bool isSeller) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 10,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: SizedBox(
+          height: 52,
+          child: ElevatedButton(
+            onPressed: _handleBottomAction,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.mfuRed,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              isSeller ? 'Edit Product' : 'Chat with Seller',
+              style: GoogleFonts.kanit(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
             ),
           ),
         ),

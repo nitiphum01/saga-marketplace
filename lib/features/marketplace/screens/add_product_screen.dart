@@ -1,11 +1,17 @@
+import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_application_1/core/constants/app_colors.dart';
+import 'package:flutter_application_1/core/services/image_picker_service.dart';
+import 'package:flutter_application_1/core/widgets/saga_app_bar.dart';
+import 'package:flutter_application_1/features/auth/providers/auth_provider.dart';
 import 'package:flutter_application_1/features/marketplace/models/product_model.dart';
 import 'package:flutter_application_1/features/marketplace/providers/product_provider.dart';
-import 'package:flutter_application_1/features/auth/providers/auth_provider.dart';
-import 'dart:math';
 
 class AddProductScreen extends StatefulWidget {
   const AddProductScreen({super.key});
@@ -15,25 +21,21 @@ class AddProductScreen extends StatefulWidget {
 }
 
 class _AddProductScreenState extends State<AddProductScreen> {
-  late GlobalKey<FormState> _formKey;
-  late TextEditingController _titleController;
-  late TextEditingController _priceController;
-  late TextEditingController _descriptionController;
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _priceController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
+  final ImagePickerService _imagePickerService = ImagePickerService();
 
   String? _selectedCategory;
-  String? _selectedImagePath;
+  final List<XFile> _selectedImages = [];
   bool _isLoading = false;
 
-  final List<String> _categories = ['Book', 'Learning tools', 'Other items'];
-
-  @override
-  void initState() {
-    super.initState();
-    _formKey = GlobalKey<FormState>();
-    _titleController = TextEditingController();
-    _priceController = TextEditingController();
-    _descriptionController = TextEditingController();
-  }
+  static const List<String> _categories = [
+    'Book',
+    'Learning tools',
+    'Other items',
+  ];
 
   @override
   void dispose() {
@@ -43,63 +45,50 @@ class _AddProductScreenState extends State<AddProductScreen> {
     super.dispose();
   }
 
-  /// Simulates image picking
-  void _pickImage() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Pick Image',
-                style: GoogleFonts.kanit(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                leading: const Icon(Icons.camera_alt),
-                title: Text('Camera', style: GoogleFonts.kanit()),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _selectedImagePath =
-                        'assets/sample_product_image.jpg'; // Simulated
-                  });
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.image),
-                title: Text('Gallery', style: GoogleFonts.kanit()),
-                onTap: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _selectedImagePath =
-                        'assets/sample_product_image.jpg'; // Simulated
-                  });
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  Future<void> _addImagesFromGallery() async {
+    final pickedFiles = await _imagePickerService.pickMultiFromGallery();
+    if (!mounted || pickedFiles.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _selectedImages.addAll(pickedFiles);
+    });
   }
 
-  /// Validates the form and submits the product
-  void _submitProduct() async {
+  Future<void> _addImageFromCamera() async {
+    final pickedFile = await _imagePickerService.pickFromCamera();
+    if (!mounted || pickedFile == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedImages.add(pickedFile);
+    });
+  }
+
+  void _removeImageAt(int index) {
+    if (index < 0 || index >= _selectedImages.length) {
+      return;
+    }
+
+    setState(() {
+      _selectedImages.removeAt(index);
+    });
+  }
+
+  Future<void> _submitProduct() async {
     if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    if (_selectedImagePath == null) {
+    if (_selectedImages.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Please add a photo', style: GoogleFonts.kanit()),
+          content: Text(
+            'Please add at least 1 photo',
+            style: GoogleFonts.kanit(),
+          ),
         ),
       );
       return;
@@ -120,42 +109,50 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
     try {
       final authProvider = context.read<AuthProvider>();
-      final userId = authProvider.user?.id ?? 'user_123';
+      final userId = authProvider.getCurrentUserId();
+      if (userId == 'user_guest') {
+        throw Exception('Session expired. Please sign in again.');
+      }
 
-      // Generate random product ID
-      final productId = 'product_${Random().nextInt(100000)}';
+      final productProvider = context.read<ProductProvider>();
+      final uploadedImageUrls = await productProvider.uploadProductImages(
+        sellerId: userId,
+        imageFiles: _selectedImages,
+      );
 
-      // Create new product
+      final productId =
+          'product_${DateTime.now().microsecondsSinceEpoch}_${Random().nextInt(1000)}';
+
       final newProduct = Product(
         id: productId,
         sellerId: userId,
-        title: _titleController.text,
-        description: _descriptionController.text,
+        title: _titleController.text.trim(),
+        description: _descriptionController.text.trim(),
         price: double.parse(_priceController.text),
         category: _selectedCategory!,
-        imageUrl:
-            'https://via.placeholder.com/300?text=${_titleController.text}',
+        imageUrls: uploadedImageUrls,
         status: ProductStatus.available,
         createdAt: DateTime.now(),
       );
 
-      // Add product to provider
-      await context.read<ProductProvider>().addProduct(newProduct);
+      await productProvider.addProduct(newProduct);
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
-      // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Product Posted!', style: GoogleFonts.kanit()),
-          backgroundColor: const Color(0xFFB71C1C),
+          backgroundColor: AppColors.mfuRed,
         ),
       );
 
-      // Navigate back to home
       context.go('/home');
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e', style: GoogleFonts.kanit())),
@@ -169,12 +166,133 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
+  Widget _buildImageSelectionButtons() {
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _isLoading ? null : _addImagesFromGallery,
+            icon: const Icon(Icons.photo_library_outlined),
+            label: Text('Gallery', style: GoogleFonts.kanit()),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.mfuBlue,
+              side: BorderSide(color: Colors.grey.shade300),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _isLoading ? null : _addImageFromCamera,
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: Text('Camera', style: GoogleFonts.kanit()),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.mfuBlue,
+              side: BorderSide(color: Colors.grey.shade300),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSelectedImagesPreview() {
+    if (_selectedImages.isEmpty) {
+      return Container(
+        height: 140,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: Colors.grey.shade300,
+            width: 1.5,
+            strokeAlign: BorderSide.strokeAlignInside,
+          ),
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.grey.shade50,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.cloud_upload_outlined,
+              size: 36,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No photos selected yet',
+              style: GoogleFonts.kanit(
+                fontSize: 14,
+                color: Colors.grey.shade600,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _selectedImages.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+      ),
+      itemBuilder: (context, index) {
+        final imageFile = _selectedImages[index];
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                color: Colors.grey.shade200,
+                child: FutureBuilder<Uint8List>(
+                  future: imageFile.readAsBytes(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return const Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      );
+                    }
+
+                    return Image.memory(snapshot.data!, fit: BoxFit.cover);
+                  },
+                ),
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: InkWell(
+                onTap: _isLoading ? null : () => _removeImageAt(index),
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: const BoxDecoration(
+                    color: Colors.black87,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close, color: Colors.white, size: 16),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
+      appBar: SagaAppBar(
         title: Text(
           'Sell Item',
           style: GoogleFonts.kanit(
@@ -197,56 +315,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Image Upload Section
-              GestureDetector(
-                onTap: _pickImage,
-                child: Container(
-                  height: 200,
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: Colors.grey.shade400,
-                      width: 2,
-                      strokeAlign: BorderSide.strokeAlignInside,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    color: Colors.grey.shade50,
-                  ),
-                  child: _selectedImagePath != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Container(
-                            color: Colors.grey.shade200,
-                            child: Icon(
-                              Icons.image,
-                              size: 60,
-                              color: Colors.grey.shade400,
-                            ),
-                          ),
-                        )
-                      : Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.cloud_upload_outlined,
-                              size: 40,
-                              color: Colors.grey.shade400,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Add Photo',
-                              style: GoogleFonts.kanit(
-                                fontSize: 14,
-                                color: Colors.grey.shade600,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
+              Text(
+                'Photos',
+                style: GoogleFonts.kanit(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
                 ),
               ),
+              const SizedBox(height: 8),
+              _buildImageSelectionButtons(),
+              const SizedBox(height: 12),
+              _buildSelectedImagesPreview(),
               const SizedBox(height: 24),
-
-              // Title Field
               Text(
                 'Item Title',
                 style: GoogleFonts.kanit(
@@ -271,7 +352,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFB71C1C)),
+                    borderSide: const BorderSide(color: AppColors.mfuRed),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -287,8 +368,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 },
               ),
               const SizedBox(height: 16),
-
-              // Price Field
               Text(
                 'Price (฿)',
                 style: GoogleFonts.kanit(
@@ -316,7 +395,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFB71C1C)),
+                    borderSide: const BorderSide(color: AppColors.mfuRed),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -335,8 +414,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 },
               ),
               const SizedBox(height: 16),
-
-              // Category Dropdown
               Text(
                 'Category',
                 style: GoogleFonts.kanit(
@@ -374,7 +451,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFB71C1C)),
+                    borderSide: const BorderSide(color: AppColors.mfuRed),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -389,8 +466,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 },
               ),
               const SizedBox(height: 16),
-
-              // Description Field
               Text(
                 'Description',
                 style: GoogleFonts.kanit(
@@ -417,7 +492,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFB71C1C)),
+                    borderSide: const BorderSide(color: AppColors.mfuRed),
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -433,27 +508,25 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 },
               ),
               const SizedBox(height: 24),
-
-              // Submit Button
               ElevatedButton(
                 onPressed: _isLoading ? null : _submitProduct,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFB71C1C),
-                  disabledBackgroundColor: const Color(
-                    0xFFB71C1C,
-                  ).withOpacity(0.6),
+                  backgroundColor: AppColors.mfuRed,
+                  disabledBackgroundColor: AppColors.mfuRed.withValues(
+                    alpha: 0.6,
+                  ),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
                 child: _isLoading
-                    ? SizedBox(
+                    ? const SizedBox(
                         height: 20,
                         width: 20,
                         child: CircularProgressIndicator(
                           valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white.withOpacity(0.7),
+                            Colors.white,
                           ),
                           strokeWidth: 2,
                         ),

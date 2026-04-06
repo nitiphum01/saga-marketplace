@@ -1,195 +1,301 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_application_1/features/chat/models/chat_model.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_application_1/features/marketplace/models/product_model.dart';
 
-/// Provider for managing chat state
+/// Firestore-backed provider for conversations and messages.
 class ChatProvider extends ChangeNotifier {
-  List<ChatRoom> _chatRooms = [];
+  final FirebaseFirestore _firestore;
 
-  ChatProvider() {
-    _initializeMockData();
+  ChatProvider({FirebaseFirestore? firestore})
+    : _firestore = firestore ?? FirebaseFirestore.instance;
+
+  CollectionReference<Map<String, dynamic>> get _conversationsRef =>
+      _firestore.collection('conversations');
+
+  String _buildConversationId({
+    required String productId,
+    required String userA,
+    required String userB,
+  }) {
+    final participants = [userA.trim(), userB.trim()]..sort();
+    final safeProductId = productId.replaceAll('/', '_');
+    return '${safeProductId}_${participants[0]}_${participants[1]}';
   }
 
-  /// Initialize mock chat rooms
-  void _initializeMockData() {
-    final now = DateTime.now();
+  /// Ensures a conversation document exists and returns its deterministic id.
+  /// Creates new conversation if it doesn't exist, or returns existing if it does.
+  Future<String> initiateChat(Product product, String currentUserId) async {
+    final buyerId = currentUserId.trim();
+    final sellerId = product.sellerId.trim();
 
-    _chatRooms = [
-      ChatRoom(
-        id: 'room_001',
-        productId: 'product_001',
-        productTitle: 'Calculus Textbook',
-        productImage: 'https://via.placeholder.com/300?text=Calculus',
-        otherUserId: 'seller_001',
-        otherUserName: 'Somchai',
-        lastMessage: 'Yes, can meet at M-Square?',
-        lastMessageTime: now.subtract(const Duration(minutes: 15)),
-        unreadCount: 1,
-        messages: [
-          ChatMessage(
-            id: 'msg_001',
-            senderId: 'user_123',
-            text: 'Is this still available?',
-            timestamp: now.subtract(const Duration(minutes: 30)),
-            isRead: true,
-          ),
-          ChatMessage(
-            id: 'msg_002',
-            senderId: 'seller_001',
-            text: 'Yes, can meet at M-Square?',
-            timestamp: now.subtract(const Duration(minutes: 15)),
-            isRead: false,
-          ),
-        ],
-      ),
-      ChatRoom(
-        id: 'room_002',
-        productId: 'product_005',
-        productTitle: 'Scientific Calculator',
-        productImage: 'https://via.placeholder.com/300?text=Calculator',
-        otherUserId: 'seller_002',
-        otherUserName: 'Malee',
-        lastMessage: 'Ok, see you tomorrow!',
-        lastMessageTime: now.subtract(const Duration(hours: 2)),
-        unreadCount: 0,
-        messages: [
-          ChatMessage(
-            id: 'msg_003',
-            senderId: 'user_123',
-            text: 'Can I see it tomorrow?',
-            timestamp: now.subtract(const Duration(hours: 3)),
-            isRead: true,
-          ),
-          ChatMessage(
-            id: 'msg_004',
-            senderId: 'seller_002',
-            text: 'Ok, see you tomorrow!',
-            timestamp: now.subtract(const Duration(hours: 2)),
-            isRead: true,
-          ),
-        ],
-      ),
-      ChatRoom(
-        id: 'room_003',
-        productId: 'product_008',
-        productTitle: 'Lab Coat (White)',
-        productImage: 'https://via.placeholder.com/300?text=Lab+Coat',
-        otherUserId: 'seller_003',
-        otherUserName: 'Nida',
-        lastMessage: 'Size M available',
-        lastMessageTime: now.subtract(const Duration(days: 1)),
-        unreadCount: 2,
-        messages: [
-          ChatMessage(
-            id: 'msg_005',
-            senderId: 'user_123',
-            text: 'What size is this?',
-            timestamp: now.subtract(const Duration(days: 1, hours: 2)),
-            isRead: true,
-          ),
-          ChatMessage(
-            id: 'msg_006',
-            senderId: 'seller_003',
-            text: 'Size M available',
-            timestamp: now.subtract(const Duration(days: 1)),
-            isRead: false,
-          ),
-        ],
-      ),
-    ];
+    if (buyerId.isEmpty || buyerId == 'user_guest') {
+      throw Exception('Please sign in before starting a chat.');
+    }
+
+    if (sellerId.isEmpty) {
+      throw Exception('Invalid seller for this product.');
+    }
+
+    final conversationId = _buildConversationId(
+      productId: product.id,
+      userA: buyerId,
+      userB: sellerId,
+    );
+
+    final participants = [buyerId, sellerId]..sort();
+
+    /// Create seller name display (can be customized later with user profile data)
+    final sellerDisplayName =
+        'Seller ${sellerId.substring(0, sellerId.length >= 6 ? 6 : sellerId.length)}';
+
+    await _conversationsRef.doc(conversationId).set({
+      'conversationId': conversationId,
+      'participants': participants,
+      'buyerId': buyerId,
+      'sellerId': sellerId,
+      'sellerName': sellerDisplayName,
+      'lastMessage': '',
+      'lastTimestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'productInfo': {
+        'id': product.id,
+        'title': product.title,
+        'image': product.imageUrl,
+      },
+    }, SetOptions(merge: true));
+
+    return conversationId;
   }
 
-  /// Returns list of chat rooms sorted by time (newest first)
-  List<ChatRoom> get chatRooms {
-    final sorted = List<ChatRoom>.from(_chatRooms);
-    sorted.sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
-    return sorted;
+  /// Sends a message and updates the parent conversation metadata atomically.
+  Future<void> sendMessage({
+    required String roomId,
+    required String text,
+    required String senderId,
+    Product? product,
+    String? sellerId,
+  }) async {
+    final messageText = text.trim();
+    final safeSenderId = senderId.trim();
+
+    if (roomId.trim().isEmpty) {
+      throw Exception('Invalid room id.');
+    }
+    if (messageText.isEmpty) {
+      return;
+    }
+    if (safeSenderId.isEmpty || safeSenderId == 'user_guest') {
+      throw Exception('Please sign in before sending a message.');
+    }
+
+    final conversationRef = _conversationsRef.doc(roomId);
+    final conversationSnap = await conversationRef.get();
+    final existing = conversationSnap.data() ?? <String, dynamic>{};
+
+    final existingParticipants =
+        (existing['participants'] as List?)?.whereType<String>().toList() ??
+        <String>[];
+
+    final resolvedSellerId =
+        (existing['sellerId'] as String?)?.trim().isNotEmpty == true
+        ? (existing['sellerId'] as String).trim()
+        : (sellerId ?? product?.sellerId ?? '').trim();
+
+    final participants = existingParticipants.isNotEmpty
+        ? existingParticipants
+        : <String>[
+            safeSenderId,
+            resolvedSellerId,
+          ].where((id) => id.isNotEmpty).toList();
+
+    if (participants.length < 2) {
+      throw Exception('Unable to resolve participants for this conversation.');
+    }
+
+    participants.sort();
+
+    final existingProductInfo =
+        existing['productInfo'] as Map<String, dynamic>?;
+    final productInfo =
+        existingProductInfo ??
+        (product == null
+            ? null
+            : {
+                'id': product.id,
+                'title': product.title,
+                'image': product.imageUrl,
+              });
+
+    final messageRef = conversationRef.collection('messages').doc();
+    final batch = _firestore.batch();
+
+    batch.set(messageRef, {
+      'id': messageRef.id,
+      'senderId': safeSenderId,
+      'text': messageText,
+      'timestamp': FieldValue.serverTimestamp(),
+      'isRead': false,
+    });
+
+    final sellerName =
+        existing['sellerName'] as String? ??
+        'Seller ${resolvedSellerId.substring(0, resolvedSellerId.length >= 6 ? 6 : resolvedSellerId.length)}';
+
+    batch.set(conversationRef, {
+      'conversationId': roomId,
+      'participants': participants,
+      'sellerId': resolvedSellerId,
+      'sellerName': sellerName,
+      'lastMessage': messageText,
+      'lastTimestamp': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (!conversationSnap.exists) 'createdAt': FieldValue.serverTimestamp(),
+      if (productInfo != null) 'productInfo': productInfo,
+    }, SetOptions(merge: true));
+
+    await batch.commit();
   }
 
-  /// Get a specific chat room by ID
-  ChatRoom? getChatRoomById(String roomId) {
-    try {
-      return _chatRooms.firstWhere((room) => room.id == roomId);
-    } catch (e) {
-      return null;
+  Stream<QuerySnapshot<Map<String, dynamic>>> streamConversationsForUser(
+    String currentUserId,
+  ) {
+    return _conversationsRef
+        .where('participants', arrayContains: currentUserId)
+        .orderBy('lastTimestamp', descending: true)
+        .snapshots();
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> streamConversation(
+    String roomId,
+  ) {
+    return _conversationsRef.doc(roomId).snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> streamMessages(String roomId) {
+    return _conversationsRef
+        .doc(roomId)
+        .collection('messages')
+        .orderBy('timestamp', descending: false)
+        .snapshots();
+  }
+
+  Future<void> togglePinStatus({
+    required String roomId,
+    required String currentUserId,
+  }) async {
+    final safeRoomId = roomId.trim();
+    final safeUserId = currentUserId.trim();
+
+    if (safeRoomId.isEmpty) {
+      throw Exception('Invalid room id.');
+    }
+    if (safeUserId.isEmpty || safeUserId == 'user_guest') {
+      throw Exception('Please sign in first.');
+    }
+
+    final ref = _conversationsRef.doc(safeRoomId);
+
+    await _firestore.runTransaction((transaction) async {
+      final snap = await transaction.get(ref);
+      if (!snap.exists) {
+        throw Exception('Conversation not found.');
+      }
+
+      final data = snap.data() ?? <String, dynamic>{};
+      final pinnedBy =
+          (data['pinnedBy'] as List?)?.whereType<String>().toSet() ??
+          <String>{};
+
+      if (pinnedBy.contains(safeUserId)) {
+        transaction.update(ref, {
+          'pinnedBy': FieldValue.arrayRemove([safeUserId]),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        transaction.update(ref, {
+          'pinnedBy': FieldValue.arrayUnion([safeUserId]),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    });
+  }
+
+  Future<void> deleteConversation({
+    required String roomId,
+    required String currentUserId,
+  }) async {
+    final safeRoomId = roomId.trim();
+    final safeUserId = currentUserId.trim();
+
+    if (safeRoomId.isEmpty) {
+      throw Exception('Invalid room id.');
+    }
+    if (safeUserId.isEmpty || safeUserId == 'user_guest') {
+      throw Exception('Please sign in first.');
+    }
+
+    final ref = _conversationsRef.doc(safeRoomId);
+
+    final shouldHardDelete = await _firestore.runTransaction<bool>((
+      transaction,
+    ) async {
+      final snap = await transaction.get(ref);
+      if (!snap.exists) {
+        return false;
+      }
+
+      final data = snap.data() ?? <String, dynamic>{};
+      final participants =
+          (data['participants'] as List?)?.whereType<String>().toList() ??
+          <String>[];
+
+      final deletedBy =
+          (data['deletedBy'] as List?)?.whereType<String>().toSet() ??
+          <String>{};
+      deletedBy.add(safeUserId);
+
+      final allParticipantsDeleted =
+          participants.isNotEmpty && participants.every(deletedBy.contains);
+
+      if (allParticipantsDeleted) {
+        return true;
+      }
+
+      transaction.update(ref, {
+        'deletedBy': FieldValue.arrayUnion([safeUserId]),
+        'pinnedBy': FieldValue.arrayRemove([safeUserId]),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      return false;
+    });
+
+    if (shouldHardDelete) {
+      await _deleteConversationAndMessages(safeRoomId);
     }
   }
 
-  /// Initiate or get existing chat for a product
-  String initiateChat(Product product, String currentUserId) {
-    // Check if chat room already exists for this product and user
-    try {
-      final existingRoom = _chatRooms.firstWhere(
-        (room) => room.productId == product.id,
-      );
-      return existingRoom.id;
-    } catch (e) {
-      // No existing room, create new one
-      final now = DateTime.now();
-      final newRoomId = 'room_${now.millisecondsSinceEpoch}';
+  Future<void> _deleteConversationAndMessages(String roomId) async {
+    final conversationRef = _conversationsRef.doc(roomId);
 
-      final newRoom = ChatRoom(
-        id: newRoomId,
-        productId: product.id,
-        productTitle: product.title,
-        productImage: product.imageUrl,
-        otherUserId: product.sellerId,
-        otherUserName: 'Seller ${product.sellerId.substring(0, 7)}',
-        lastMessage: 'Chat started',
-        lastMessageTime: now,
-        unreadCount: 0,
-        messages: [],
-      );
+    while (true) {
+      final messagesSnap = await conversationRef
+          .collection('messages')
+          .limit(400)
+          .get();
 
-      _chatRooms.add(newRoom);
-      notifyListeners();
-      return newRoomId;
+      if (messagesSnap.docs.isEmpty) {
+        break;
+      }
+
+      final batch = _firestore.batch();
+      for (final doc in messagesSnap.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
     }
-  }
 
-  /// Send a message in a chat room
-  void sendMessage(String roomId, String text, String senderId) {
-    final roomIndex = _chatRooms.indexWhere((room) => room.id == roomId);
-    if (roomIndex == -1) return;
-
-    final now = DateTime.now();
-    final messageId = 'msg_${now.millisecondsSinceEpoch}';
-
-    final newMessage = ChatMessage(
-      id: messageId,
-      senderId: senderId,
-      text: text,
-      timestamp: now,
-      isRead: false,
-    );
-
-    final room = _chatRooms[roomIndex];
-    final updatedMessages = [...room.messages, newMessage];
-
-    // Update the chat room
-    _chatRooms[roomIndex] = room.copyWith(
-      messages: updatedMessages,
-      lastMessage: text,
-      lastMessageTime: now,
-      // Reset unread count if sender is current user
-      unreadCount: senderId == 'user_123' ? 0 : room.unreadCount + 1,
-    );
-
-    notifyListeners();
-  }
-
-  /// Mark messages as read in a chat room
-  void markAsRead(String roomId) {
-    final roomIndex = _chatRooms.indexWhere((room) => room.id == roomId);
-    if (roomIndex == -1) return;
-
-    final room = _chatRooms[roomIndex];
-    _chatRooms[roomIndex] = room.copyWith(unreadCount: 0);
-    notifyListeners();
-  }
-
-  /// Get total unread count across all rooms
-  int get totalUnreadCount {
-    return _chatRooms.fold(0, (sum, room) => sum + room.unreadCount);
+    await conversationRef.delete();
   }
 }

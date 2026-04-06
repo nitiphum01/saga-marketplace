@@ -85,4 +85,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'saga-marketplace-f4811.firebasestorage.app',
     measurementId: 'G-2GWFSM4JQ6',
   );
+
 }

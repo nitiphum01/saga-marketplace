@@ -21,7 +21,7 @@ class Product {
   final String title;
   final String description;
   final double price;
-  final String imageUrl;
+  final List<String> imageUrls;
   final String category;
   final ProductStatus status;
   final DateTime createdAt;
@@ -32,11 +32,32 @@ class Product {
     required this.title,
     required this.description,
     required this.price,
-    required this.imageUrl,
+    List<String>? imageUrls,
+    String? imageUrl,
     required this.category,
     this.status = ProductStatus.available,
     required this.createdAt,
-  });
+  }) : imageUrls = _normalizeImageUrls(
+         imageUrls: imageUrls,
+         imageUrl: imageUrl,
+       );
+
+  static List<String> _normalizeImageUrls({
+    List<String>? imageUrls,
+    String? imageUrl,
+  }) {
+    if (imageUrls != null && imageUrls.isNotEmpty) {
+      return List<String>.from(imageUrls.where((url) => url.trim().isNotEmpty));
+    }
+
+    if (imageUrl != null && imageUrl.trim().isNotEmpty) {
+      return [imageUrl.trim()];
+    }
+
+    return const <String>[];
+  }
+
+  String get imageUrl => imageUrls.isNotEmpty ? imageUrls.first : '';
 
   /// Creates a copy of this Product with optional field replacements
   Product copyWith({
@@ -45,6 +66,7 @@ class Product {
     String? title,
     String? description,
     double? price,
+    List<String>? imageUrls,
     String? imageUrl,
     String? category,
     ProductStatus? status,
@@ -56,7 +78,8 @@ class Product {
       title: title ?? this.title,
       description: description ?? this.description,
       price: price ?? this.price,
-      imageUrl: imageUrl ?? this.imageUrl,
+      imageUrls: imageUrls ?? this.imageUrls,
+      imageUrl: imageUrl,
       category: category ?? this.category,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
@@ -71,7 +94,7 @@ class Product {
       'title': title,
       'description': description,
       'price': price,
-      'imageUrl': imageUrl,
+      'imageUrls': imageUrls,
       'category': category,
       'status': status.value,
       'createdAt': createdAt.toIso8601String(),
@@ -80,13 +103,21 @@ class Product {
 
   /// Creates Product instance from Map
   static Product fromMap(Map<String, dynamic> map) {
+    final rawUrls = map['imageUrls'];
+    final imageUrls = rawUrls is List
+        ? rawUrls.whereType<String>().toList()
+        : <String>[];
+
+    final legacyImageUrl = map['imageUrl'] as String?;
+
     return Product(
       id: map['id'] as String,
       sellerId: map['sellerId'] as String,
       title: map['title'] as String,
       description: map['description'] as String,
       price: (map['price'] as num).toDouble(),
-      imageUrl: map['imageUrl'] as String,
+      imageUrls: imageUrls,
+      imageUrl: legacyImageUrl,
       category: map['category'] as String,
       status: ProductStatus.fromString(map['status'] as String? ?? 'available'),
       createdAt: DateTime.parse(map['createdAt'] as String),
@@ -107,10 +138,33 @@ class Product {
           title == other.title &&
           description == other.description &&
           price == other.price &&
-          imageUrl == other.imageUrl &&
+          _listEquals(imageUrls, other.imageUrls) &&
           category == other.category &&
           status == other.status &&
           createdAt == other.createdAt;
+
+  static bool _listEquals(List<String> a, List<String> b) {
+    if (identical(a, b)) {
+      return true;
+    }
+    if (a.length != b.length) {
+      return false;
+    }
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static int _listHash(List<String> values) {
+    var hash = 17;
+    for (final value in values) {
+      hash = 37 * hash + value.hashCode;
+    }
+    return hash;
+  }
 
   @override
   int get hashCode =>
@@ -119,7 +173,7 @@ class Product {
       title.hashCode ^
       description.hashCode ^
       price.hashCode ^
-      imageUrl.hashCode ^
+      _listHash(imageUrls) ^
       category.hashCode ^
       status.hashCode ^
       createdAt.hashCode;

@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_application_1/core/constants/app_colors.dart';
 import 'package:flutter_application_1/features/auth/providers/auth_provider.dart';
+import 'package:flutter_application_1/core/providers/language_provider.dart';
+import 'package:flutter_application_1/core/localization/app_translations.dart';
+import 'package:flutter_application_1/core/services/notification_service.dart';
+import 'package:flutter_application_1/core/widgets/saga_app_bar.dart';
 
 /// Settings screen for app configuration and user actions
 class SettingsScreen extends StatefulWidget {
@@ -13,23 +18,43 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _notificationsEnabled = true;
+  final NotificationService _notificationService = NotificationService();
+
+  bool _notificationsEnabled = false;
+  bool _isLoadingNotificationPref = true;
+  bool _isSavingNotificationPref = false;
+  String? _initializedUserId;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final userId = context.read<AuthProvider>().user?.id;
+
+    if (userId == null || userId.isEmpty || _initializedUserId == userId) {
+      return;
+    }
+
+    _initializedUserId = userId;
+    _loadNotificationPreference(userId);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final languageProvider = context.watch<LanguageProvider>();
+    String t(String key) => AppTranslations.tr(languageProvider, key);
+
     return Scaffold(
-      appBar: AppBar(
-        elevation: 0,
-        backgroundColor: const Color(0xFF1565C0),
+      appBar: SagaAppBar(
+        backgroundColor: AppColors.mfuBlue,
+        centerTitle: true,
         title: Text(
-          'Setting',
+          t('settings'),
           style: GoogleFonts.kanit(
             fontSize: 20,
             fontWeight: FontWeight.bold,
             color: Colors.white,
           ),
         ),
-        centerTitle: true,
       ),
       body: Consumer<AuthProvider>(
         builder: (context, authProvider, _) {
@@ -45,7 +70,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   children: [
                     CircleAvatar(
                       radius: 32,
-                      backgroundColor: const Color(0xFF1565C0),
+                      backgroundColor: AppColors.mfuBlue,
                       child: const Icon(
                         Icons.person,
                         size: 36,
@@ -82,54 +107,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const Divider(height: 1),
 
               // Account Section
-              _buildSectionHeader('Account'),
+              _buildSectionHeader(t('account')),
               _buildMenuItem(
                 icon: Icons.storefront,
-                iconColor: const Color(0xFF1565C0),
-                title: 'My Listings',
-                subtitle: 'สินค้าที่ลงขาย',
+                iconColor: AppColors.mfuBlue,
+                title: t('myListings'),
+                subtitle: t('listedProducts'),
                 onTap: () {
-                  context.push('/my-listings');
+                  context.push('/my-products');
                 },
               ),
 
               // General Section
-              _buildSectionHeader('General'),
+              _buildSectionHeader(t('general')),
               _buildMenuItemWithSwitch(
                 icon: Icons.notifications,
-                iconColor: const Color(0xFF1565C0),
-                title: 'Notifications',
-                subtitle: 'New message alert',
+                iconColor: AppColors.mfuBlue,
+                title: t('notifications'),
+                subtitle: t('newMessageAlert'),
                 value: _notificationsEnabled,
-                onChanged: (value) {
-                  setState(() {
-                    _notificationsEnabled = value;
-                  });
-                },
-              ),
-              _buildMenuItem(
-                icon: Icons.language,
-                iconColor: const Color(0xFF1565C0),
-                title: 'Language',
-                subtitle: 'English',
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Language Settings - Coming Soon',
-                        style: GoogleFonts.kanit(),
+                enabled:
+                    !_isLoadingNotificationPref && !_isSavingNotificationPref,
+                onChanged: (value) async {
+                  final userId = user?.id;
+                  if (userId == null || userId.isEmpty) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Please sign in before changing notification settings.',
+                        ),
                       ),
-                    ),
+                    );
+                    return;
+                  }
+
+                  await _updateNotificationPreference(
+                    userId: userId,
+                    enabled: value,
                   );
                 },
               ),
 
               // Support Section
-              _buildSectionHeader('Support'),
+              _buildSectionHeader(t('support')),
               _buildMenuItem(
                 icon: Icons.phone,
-                iconColor: const Color(0xFF1565C0),
-                title: 'IT Support University',
+                iconColor: AppColors.mfuBlue,
+                title: t('itSupportUniversity'),
                 subtitle:
                     '053-****** • 053-****** • 053-******\nefr.dd@gmail.com',
                 onTap: null,
@@ -142,10 +167,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: OutlinedButton(
                   onPressed: () {
-                    _showLogoutDialog(context);
+                    _showLogoutDialog(context, languageProvider);
                   },
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFFB71C1C)),
+                    side: const BorderSide(color: AppColors.mfuRed),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -156,16 +181,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       const Icon(
                         Icons.logout,
-                        color: Color(0xFFB71C1C),
+                        color: AppColors.mfuRed,
                         size: 20,
                       ),
                       const SizedBox(width: 8),
                       Text(
-                        'Log out',
+                        t('logout'),
                         style: GoogleFonts.kanit(
                           fontSize: 16,
                           fontWeight: FontWeight.w600,
-                          color: const Color(0xFFB71C1C),
+                          color: AppColors.mfuRed,
                         ),
                       ),
                     ],
@@ -229,7 +254,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             )
           : null,
       trailing: onTap != null
-          ? const Icon(Icons.chevron_right, color: Color(0xFF1565C0))
+          ? const Icon(Icons.chevron_right, color: AppColors.mfuBlue)
           : null,
       onTap: onTap,
     );
@@ -241,6 +266,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String title,
     String? subtitle,
     required bool value,
+    bool enabled = true,
     required ValueChanged<bool> onChanged,
   }) {
     return ListTile(
@@ -271,22 +297,120 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : null,
       trailing: Switch(
         value: value,
-        onChanged: onChanged,
-        activeThumbColor: const Color(0xFFB71C1C),
+        onChanged: enabled ? onChanged : null,
+        activeColor: AppColors.mfuRed,
       ),
     );
   }
 
-  void _showLogoutDialog(BuildContext context) {
+  Future<void> _loadNotificationPreference(String userId) async {
+    setState(() {
+      _isLoadingNotificationPref = true;
+    });
+
+    try {
+      final enabled = await _notificationService.getNotificationsEnabled(
+        userId,
+      );
+
+      if (enabled) {
+        await _notificationService.saveCurrentDeviceToken(userId);
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _notificationsEnabled = enabled;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load notification settings: $e')),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingNotificationPref = false;
+      });
+    }
+  }
+
+  Future<void> _updateNotificationPreference({
+    required String userId,
+    required bool enabled,
+  }) async {
+    setState(() {
+      _isSavingNotificationPref = true;
+    });
+
+    final previousValue = _notificationsEnabled;
+
+    try {
+      if (enabled) {
+        final granted = await _notificationService.requestPermission();
+        if (!granted) {
+          if (!mounted) return;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Notification permission was not granted.'),
+            ),
+          );
+
+          setState(() {
+            _notificationsEnabled = false;
+          });
+          await _notificationService.setNotificationsEnabled(
+            userId: userId,
+            enabled: false,
+          );
+          return;
+        }
+
+        await _notificationService.saveCurrentDeviceToken(userId);
+      } else {
+        await _notificationService.disableNotificationsForDevice(userId);
+      }
+
+      await _notificationService.setNotificationsEnabled(
+        userId: userId,
+        enabled: enabled,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _notificationsEnabled = enabled;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _notificationsEnabled = previousValue;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to update notifications: $e')),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isSavingNotificationPref = false;
+      });
+    }
+  }
+
+  void _showLogoutDialog(
+    BuildContext context,
+    LanguageProvider languageProvider,
+  ) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(
-          'Log out',
+          AppTranslations.tr(languageProvider, 'logout'),
           style: GoogleFonts.kanit(fontWeight: FontWeight.bold),
         ),
         content: Text(
-          'Are you sure you want to log out?',
+          AppTranslations.tr(languageProvider, 'logoutConfirm'),
           style: GoogleFonts.kanit(),
         ),
         actions: [
@@ -295,7 +419,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Navigator.pop(context);
             },
             child: Text(
-              'Cancel',
+              AppTranslations.tr(languageProvider, 'cancel'),
               style: GoogleFonts.kanit(color: Colors.grey.shade600),
             ),
           ),
@@ -306,9 +430,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               context.go('/');
             },
             child: Text(
-              'Log out',
+              AppTranslations.tr(languageProvider, 'logout'),
               style: GoogleFonts.kanit(
-                color: const Color(0xFFB71C1C),
+                color: AppColors.mfuRed,
                 fontWeight: FontWeight.bold,
               ),
             ),
